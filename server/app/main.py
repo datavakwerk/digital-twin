@@ -4,9 +4,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 
+from .chat import router as chat_router
 from .config import get_settings
 from .knowledge import load_knowledge
-from .chat import router as chat_router
 from .llm import OpenAICompatProvider
 
 logging.basicConfig(level=logging.INFO)
