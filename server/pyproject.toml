@@ -20,11 +20,31 @@ line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM"]
+select = [
+    "E", "W",   # pycodestyle errors + warnings
+    "F",        # pyflakes: real bugs — undefined names, unused imports
+    "I",        # import sorting
+    "UP",       # modernize syntax for the target version
+    "B",        # bugbear: likely bugs (mutable defaults, unused loop vars)
+    "SIM",      # simplifiable code
+    "C4",       # better comprehensions
+    "RET",      # return-statement hygiene
+    "ARG",      # unused function arguments
+    "PTH",      # pathlib over os.path
+    "DTZ",      # naive datetimes
+    "A",        # shadowing builtins (id, type, ...)
+    "N",        # pep8 naming
+    "T20",      # no stray print() — use logging
+    "RUF",      # ruff's own rules
+]
 
 [tool.ruff.lint.per-file-ignores]
-# Knowledge modules hold prose in CONTENT strings; don't wrap it for the linter.
-"knowledge/*.py" = ["E501"]
+# Knowledge modules hold prose in CONTENT strings; don't wrap it for the
+# linter, and prose legitimately uses en dashes (RUF001 flags them as
+# "ambiguous" unicode).
+"knowledge/*.py" = ["E501", "RUF001"]
+# Fixtures and mock handlers take params they don't use.
+"tests/*" = ["ARG"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

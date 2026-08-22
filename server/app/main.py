@@ -16,7 +16,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.knowledge = load_knowledge(settings.knowledge_dir)
     logger.info("Loaded %d knowledge documents", len(app.state.knowledge))
     yield
-    
+
 def create_app() -> FastAPI:
     app = FastAPI(title="digital-twin server", lifespan=lifespan)
 
