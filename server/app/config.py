@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -9,7 +10,15 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    model: str = "gemini-3.1-flash-lite"
+    llm_provider: Literal["gemini", "openai", "deepseek", "kimi"] = "gemini"
+    gemini_model: str = "gemini-3.1-flash-lite"
+    openai_model: str = "gpt-5.6-luna"
+    deepseek_model: str = "deepseek-v4-flash"
+    kimi_model: str = "kimi-k2.6"
+    gemini_api_key: str = ""
+    openai_api_key: str = ""
+    deepseek_api_key: str = ""
+    moonshot_api_key: str = ""
     max_output_tokens: int = 4096
     knowledge_dir: Path = Path(__file__).resolve().parent.parent / "knowledge"
 
