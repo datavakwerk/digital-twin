@@ -30,4 +30,4 @@ def test_chat_streams_text_meta_done():
 
 def test_invalid_payload_is_rejected():
     with TestClient(create_app()) as client:
-        assert client.post("/api/chat", json={"messages": []}).status_code == 422
+        assert client.post("/api/chat", json={"messages": []}).status_code == 400

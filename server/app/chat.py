@@ -6,6 +6,8 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
+from .config import get_settings
+from .rate_limit import limiter
 from .schemas import ChatRequest
 
 logger = logging.getLogger(__name__)
@@ -17,6 +19,7 @@ def sse(event: dict[str, Any]) -> str:
 
 
 @router.post("/chat")
+@limiter.limit(get_settings().rate_limit)
 async def chat(request: Request, payload: ChatRequest) -> StreamingResponse:
     turns = [{"role": t.role, "content": t.content} for t in payload.messages]
     return StreamingResponse(
