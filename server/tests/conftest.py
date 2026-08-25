@@ -2,7 +2,14 @@ import json
 from typing import Any
 
 import httpx
+import pytest
 
+from app.rate_limit import limiter
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limiter():
+    limiter.reset()
 
 def sse_bytes(chunks: list[dict[str, Any]]) -> bytes:
     """Encode chunk dicts as an OpenAI-style SSE response body."""

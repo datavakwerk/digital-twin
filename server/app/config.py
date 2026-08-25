@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     moonshot_api_key: str = ""
     max_output_tokens: int = 4096
     knowledge_dir: Path = Path(__file__).resolve().parent.parent / "knowledge"
+    rate_limit: str = "20 per 10 minutes"
 
 
 @lru_cache
