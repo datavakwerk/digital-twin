@@ -5,7 +5,15 @@ export interface ChatTurn {
 
 export type ChatEvent =
   | { type: "text"; text: string }
-  | { type: "meta"; inputTokens: number; outputTokens: number }
+  | {
+      type: "meta";
+      model: string;
+      inputTokens: number;
+      outputTokens: number;
+      cachedTokens: number;
+      costUsd: number;
+      latencyMs: number;
+    }
   | { type: "error"; message: string }
   | { type: "done" };
 

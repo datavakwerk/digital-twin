@@ -24,7 +24,8 @@ def text_stream(text: str) -> list[dict[str, Any]]:
                       "finish_reason": None}]},
         {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
         {"choices": [],
-         "usage": {"prompt_tokens": 100, "completion_tokens": 50}},
+         "usage": {"prompt_tokens": 100, "completion_tokens": 50,
+                   "prompt_tokens_details": {"cached_tokens": 75}}},
     ]
 
 
