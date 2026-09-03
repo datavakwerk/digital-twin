@@ -5,12 +5,14 @@ Pick a provider with LLM_PROVIDER in .env — gemini (default), openai,
 deepseek, or kimi. All speak the same chat-completions protocol.
 """
 
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
 from .config import Settings
 from .knowledge import KnowledgeDoc
 from .openai_client import OpenAICompatClient
+from .pricing import cost_usd
 
 PROVIDERS = {
     "gemini": {
@@ -42,6 +44,12 @@ website, answering visitors' questions about Ruud and his work.
 - Be concise and friendly."""
 
 
+def _cached_tokens(usage: dict[str, Any]) -> int:
+    # Gemini, OpenAI, and Kimi report cache hits in prompt_tokens_details;
+    # DeepSeek uses its own top-level field.
+    details = usage.get("prompt_tokens_details") or {}
+    return details.get("cached_tokens") or usage.get("prompt_cache_hit_tokens") or 0
+
 def knowledge_system_prompt(docs: list[KnowledgeDoc]) -> str:
     # The chat-completions protocol has no document blocks; the knowledge
     # base rides in the system prompt as titled markdown sections.
@@ -54,6 +62,7 @@ class OpenAICompatProvider:
                  client: OpenAICompatClient | None = None):
         spec = PROVIDERS[settings.llm_provider]
         self._model = getattr(settings, spec["model_field"])
+        self._provider = settings.llm_provider
         # OpenAI's current models reject max_tokens in favor of the newer name.
         self._cap = ("max_completion_tokens" if settings.llm_provider == "openai"
                      else "max_tokens")
@@ -72,8 +81,11 @@ class OpenAICompatProvider:
             # ask for the final usage-bearing chunk
             "stream_options": {"include_usage": True},
         }
+        started = time.monotonic()
+        model = self._model
         usage: dict[str, Any] = {}
         async for chunk in self.client.stream(payload):
+            model = chunk.get("model") or model
             if chunk.get("usage"):
                 usage = chunk["usage"]
             choices = chunk.get("choices") or []
@@ -84,10 +96,16 @@ class OpenAICompatProvider:
                 # see the answer.
                 if delta.get("content"):
                     yield {"type": "text", "text": delta["content"]}
+        input_tokens = usage.get("prompt_tokens") or 0
+        output_tokens = usage.get("completion_tokens") or 0
         yield {
             "type": "meta",
-            "inputTokens": usage.get("prompt_tokens", 0),
-            "outputTokens": usage.get("completion_tokens", 0),
+            "model": model,
+            "latencyMs": round((time.monotonic() - started) * 1000),
+            "inputTokens": input_tokens,
+            "outputTokens": output_tokens,
+            "cachedTokens": _cached_tokens(usage),
+            "costUsd": round(cost_usd(self._provider, input_tokens, output_tokens), 5),
         }
 
     async def close(self) -> None:
