@@ -67,6 +67,7 @@ class OpenAICompatProvider:
         self._cap = ("max_completion_tokens" if settings.llm_provider == "openai"
                      else "max_tokens")
         self._max_output_tokens = settings.max_output_tokens
+        self._titles = [doc.title for doc in docs]
         self._system = knowledge_system_prompt(docs)
         self.client = client or OpenAICompatClient(
             api_key=getattr(settings, spec["key_field"]),
@@ -84,6 +85,8 @@ class OpenAICompatProvider:
         started = time.monotonic()
         model = self._model
         usage: dict[str, Any] = {}
+        answer = ""
+        cited: set[str] = set()
         async for chunk in self.client.stream(payload):
             model = chunk.get("model") or model
             if chunk.get("usage"):
@@ -91,11 +94,13 @@ class OpenAICompatProvider:
             choices = chunk.get("choices") or []
             if choices:
                 delta = choices[0].get("delta") or {}
-                # DeepSeek and Kimi reasoning models also stream
-                # delta["reasoning_content"]; drop it — visitors only
-                # see the answer.
                 if delta.get("content"):
+                    answer += delta["content"]
                     yield {"type": "text", "text": delta["content"]}
+                    for title in self._titles:
+                        if title not in cited and title in answer:
+                            cited.add(title)
+                            yield {"type": "citation", "title": title}
         input_tokens = usage.get("prompt_tokens") or 0
         output_tokens = usage.get("completion_tokens") or 0
         yield {
