@@ -7,6 +7,7 @@ interface Message {
   role: "user" | "assistant";
   content: string;
   error?: string;
+  citations?: string[]
 }
 
 export default function App() {
@@ -32,8 +33,10 @@ export default function App() {
     const history: ChatTurn[] = [
       ...messages
         .filter((m) => m.content)
-        .map((m): ChatTurn => ({ role: m.role, content:
-    m.content })),
+        .map((m): ChatTurn => ({
+          role: m.role, content:
+            m.content
+        })),
       { role: "user", content: question },
     ];
     setMessages([
@@ -52,6 +55,7 @@ export default function App() {
     const abort = new AbortController();
     abortRef.current = abort;
     let content = "";
+    const citations: string[] = [];
     try {
       for await (const event of streamChat(history, abort.signal)) {
         if (event.type === "text") {
@@ -59,6 +63,9 @@ export default function App() {
           patch({ content });
         } else if (event.type === "error") {
           patch({ error: event.message });
+        } else if (event.type === "citation") {
+          citations.push(event.title);
+          patch({ citations: [...citations] });
         }
       }
     } catch (err) {
@@ -93,6 +100,13 @@ export default function App() {
               {message.role === "assistant" &&
                 !message.content &&
                 !message.error && <span className="typing">…</span>}
+              {message.citations?.length ? (
+                <div className="chips">
+                  {message.citations.map((title) => (
+                    <span key={title} className="chip">{title}</span>
+                  ))}
+                </div>
+              ) : null}
               {message.error && <p className="error">{message.error}</p>}
             </div>
           </div>

@@ -15,6 +15,7 @@ export type ChatEvent =
       latencyMs: number;
     }
   | { type: "error"; message: string }
+  | { type: "citation"; title: string }
   | { type: "done" };
 
 export async function* streamChat(
