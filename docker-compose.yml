@@ -1,0 +1,22 @@
+services:
+  server:
+    build: ./server
+    ports:
+      - "3000:3000"
+    env_file: server/.env
+    volumes:
+      - ./server/app:/app/app
+      - ./server/knowledge:/app/knowledge
+    restart: unless-stopped
+
+  client:
+    build: ./client
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_PROXY_TARGET: http://server:3000
+    volumes:
+      - ./client:/app
+      - /app/node_modules
+    depends_on:
+      - server
