@@ -16,16 +16,18 @@ export type ChatEvent =
     }
   | { type: "error"; message: string }
   | { type: "citation"; title: string }
+  | { type: "trace"; nodes: { node: string; ms: number | null }[]; guardFlags: string[] }
   | { type: "done" };
 
 export async function* streamChat(
   messages: ChatTurn[],
+  threadId: string,
   signal: AbortSignal,
 ): AsyncGenerator<ChatEvent> {
   const response = await fetch("/api/chat", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ messages }),
+    body: JSON.stringify({ messages, thread_id: threadId }),
     signal,
   });
   if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);

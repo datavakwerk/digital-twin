@@ -5,8 +5,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from langgraph.checkpoint.memory import InMemorySaver
 from slowapi.errors import RateLimitExceeded
 
+from .agent.graph import build_agent
 from .chat import router as chat_router
 from .config import get_settings
 from .knowledge import load_knowledge
@@ -22,6 +24,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.knowledge = load_knowledge(settings.knowledge_dir)
     logger.info("Loaded %d knowledge documents", len(app.state.knowledge))
     app.state.llm = OpenAICompatProvider(settings, app.state.knowledge)
+    # get_provider resolves lazily so tests can swap app.state.llm's client
+    # without rebuilding the graph. In-memory checkpoints: threads live as
+    # long as the process (Postgres arrives in Phase 9).
+    app.state.agent = build_agent(lambda: app.state.llm, checkpointer=InMemorySaver())
     yield
     await app.state.llm.close()
 

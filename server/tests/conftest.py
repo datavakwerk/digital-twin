@@ -37,3 +37,12 @@ def fake_transport(chunks: list[dict[str, Any]]) -> httpx.MockTransport:
         )
 
     return httpx.MockTransport(handler)
+
+def parse_events(body: str) -> list[dict[str, Any]]:
+    return [json.loads(line[len("data: "):])
+            for line in body.splitlines() if line.startswith("data: ")]
+
+
+def visible(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop diagnostic trace events; most tests assert the visitor-facing stream."""
+    return [e for e in events if e["type"] != "trace"]

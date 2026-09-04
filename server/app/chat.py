@@ -2,6 +2,7 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
@@ -22,16 +23,18 @@ def sse(event: dict[str, Any]) -> str:
 @limiter.limit(get_settings().rate_limit)
 async def chat(request: Request, payload: ChatRequest) -> StreamingResponse:
     turns = [{"role": t.role, "content": t.content} for t in payload.messages]
+    thread_id = payload.thread_id or uuid4().hex
     return StreamingResponse(
-        stream_sse(request.app.state.llm, turns),
+        stream_sse(request.app.state.agent, turns, thread_id),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache"},
     )
 
 
-async def stream_sse(provider: Any, turns: list[dict[str, str]]) -> AsyncIterator[str]:
+async def stream_sse(agent: Any, turns: list[dict[str, str]], thread_id: str) -> AsyncIterator[str]:
+    config = {"configurable": {"thread_id": thread_id}}
     try:
-        async for event in provider.stream(turns):
+        async for event in agent.astream({"turns": turns}, config, stream_mode="custom"):
             yield sse(event)
     except Exception:
         logger.exception("Chat stream failed")

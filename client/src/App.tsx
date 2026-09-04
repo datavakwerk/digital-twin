@@ -15,6 +15,8 @@ export default function App() {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  // One conversation thread per page load; the server checkpoints state by it.
+  const threadRef = useRef(crypto.randomUUID());
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -57,7 +59,7 @@ export default function App() {
     let content = "";
     const citations: string[] = [];
     try {
-      for await (const event of streamChat(history, abort.signal)) {
+      for await (const event of streamChat(history, threadRef.current, abort.signal)) {
         if (event.type === "text") {
           content += event.text;
           patch({ content });
