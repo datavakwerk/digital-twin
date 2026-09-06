@@ -35,6 +35,11 @@ class AgentState(TypedDict, total=False):
     loop_meta: dict[str, Any] | None
     # Every tool the model called on this thread (checkpointed audit trail).
     tools_used: list[str]
+    # Ruud's decision on the pending high-risk action, set on graph resume:
+    # {"decided": bool, "approved": bool, "note": str | None}.
+    approval: dict[str, Any] | None
+    # Approved contact drafts, persisted for the thread's lifetime.
+    contact_drafts: list[dict[str, Any]]
     # Accumulated across the thread's lifetime (checkpointed).
     total_cost_usd: float
     message_count: int

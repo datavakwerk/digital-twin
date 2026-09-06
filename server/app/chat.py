@@ -14,6 +14,10 @@ from .schemas import ChatRequest
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
 
+APPROVAL_NOTICE = (
+    "\n\nThis request needs Ruud's personal approval — it has been queued for his review."
+)
+
 
 def sse(event: dict[str, Any]) -> str:
     return f"data: {json.dumps(event)}\n\n"
@@ -25,17 +29,28 @@ async def chat(request: Request, payload: ChatRequest) -> StreamingResponse:
     turns = [{"role": t.role, "content": t.content} for t in payload.messages]
     thread_id = payload.thread_id or uuid4().hex
     return StreamingResponse(
-        stream_sse(request.app.state.agent, turns, thread_id),
+        stream_sse(request.app.state, turns, thread_id),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache"},
     )
 
 
-async def stream_sse(agent: Any, turns: list[dict[str, str]], thread_id: str) -> AsyncIterator[str]:
+async def stream_sse(
+    app_state: Any, turns: list[dict[str, str]], thread_id: str
+) -> AsyncIterator[str]:
+    agent = app_state.agent
     config = {"configurable": {"thread_id": thread_id}}
     try:
         async for event in agent.astream({"turns": turns}, config, stream_mode="custom"):
             yield sse(event)
+        snapshot = await agent.aget_state(config)
+        if snapshot.interrupts:
+            # A high-risk tool paused the graph for Ruud's approval. Queue it
+            # for the admin endpoint and tell the visitor.
+            pending = snapshot.interrupts[0].value or {}
+            app_state.approvals[thread_id] = {"thread_id": thread_id, **pending}
+            yield sse({"type": "text", "text": APPROVAL_NOTICE})
+            yield sse({"type": "approval", "status": "pending"})
     except Exception:
         logger.exception("Chat stream failed")
         yield sse({"type": "error", "message": "Unexpected server error."})

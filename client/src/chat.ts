@@ -18,6 +18,7 @@ export type ChatEvent =
   | { type: "citation"; title: string }
   | { type: "trace"; nodes: { node: string; ms: number | null }[]; guardFlags: string[] }
   | { type: "tool"; name: string }
+  | { type: "approval"; status: "pending" }
   | { type: "done" };
 
 export async function* streamChat(

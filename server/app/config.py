@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     # Hard daily spend cap (USD); when reached the agent refuses politely
     # until midnight. 0 disables the cap.
     daily_budget_usd: float = 2.0
+    # Bearer token for /api/admin/* (approving high-risk agent actions).
+    # Empty disables the admin endpoints entirely.
+    admin_token: str = ""
 
 
 @lru_cache

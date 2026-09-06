@@ -90,20 +90,3 @@ def test_tool_loop_stops_at_round_budget():
     assert recorder.calls == 4
     # Past the budget the model is forced to answer in text.
     assert recorder.payloads[-1]["tool_choice"] == "none"
-
-
-def test_high_risk_tool_is_declined_without_approval():
-    draft = {"subject": "Hi", "message": "Hire Ruud?", "sender_contact": "jane@example.com"}
-    llm, recorder = fake_llm([
-        tool_call_stream("draft_contact_message", draft),
-        text_stream("I couldn't submit that."),
-    ])
-    with TestClient(create_app()) as client:
-        client.app.state.llm.client = llm
-        response = client.post("/api/chat", json=user_message("Pass my inquiry on to Ruud."))
-
-    assert response.status_code == 200
-    assert recorder.calls == 2
-    tool_result = recorder.payloads[1]["messages"][-1]
-    assert tool_result["role"] == "tool"
-    assert '"declined"' in tool_result["content"]

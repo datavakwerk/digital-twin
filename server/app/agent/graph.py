@@ -2,13 +2,16 @@
 
 Graph shape:
 
-    START → guard_input ─┬→ refuse ──────────────────→ END
-                         └→ generate ─┬→ execute_tools ─┐
-                                      │       ↑─────────┘  (≤ MAX_TOOL_ROUNDS)
-                                      └→ verify ────────→ END
+    START → guard_input ─┬→ refuse ─────────────────────────→ END
+                         └→ generate ─┬→ request_approval ─┐   (high-risk tool:
+                                      │        (interrupt) │    pause for Ruud)
+                                      ├→ execute_tools ←───┘
+                                      │       ↑└────────┐  (≤ MAX_TOOL_ROUNDS)
+                                      │       └─────────┘
+                                      └→ verify ─────────→ END
 
-Routing, tool execution, and verification are deterministic Python; only
-`generate` touches a model, through the provider. Nodes emit SSE-ready
+Routing, guarding, tool execution, and verification are deterministic
+Python; only `generate` touches a model, through the provider. Nodes emit SSE-ready
 event dicts through LangGraph's custom stream writer; chat.py forwards them
 to the browser.
 """
@@ -23,6 +26,7 @@ from typing import Any
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import interrupt
 
 from ..knowledge import KnowledgeDoc
 from .budget import BudgetTracker
@@ -37,13 +41,13 @@ MAX_TOOL_ROUNDS = 3
 # Answers longer than this without a single citation get flagged for review.
 UNCITED_ANSWER_MIN_CHARS = 200
 
-# Numeric meta fields summed across the tool loop's model rounds.
-METERED_FIELDS = ("inputTokens", "outputTokens", "cachedTokens", "latencyMs")
-
 BUDGET_REFUSAL = (
     "I've reached my usage budget for today — please come back tomorrow, or "
     "contact Ruud directly via the site."
 )
+
+# Numeric meta fields summed across the tool loop's model rounds.
+METERED_FIELDS = ("inputTokens", "outputTokens", "cachedTokens", "latencyMs")
 
 
 def _traced(name: str, fn: Callable[[AgentState], Any]) -> Callable[[AgentState], Any]:
@@ -127,6 +131,7 @@ def build_agent(
             "loop_messages": [],
             "tool_rounds": 0,
             "loop_meta": None,
+            "approval": None,
         }
 
     def route_after_guard(state: AgentState) -> str:
@@ -189,12 +194,42 @@ def build_agent(
                 writer({"type": "meta", **meta_totals})
         return updates
 
+    def _high_risk(call: dict[str, Any]) -> bool:
+        tool = tools_by_name.get(call["name"])
+        return tool is not None and tool.high_risk
+
     def route_after_generate(state: AgentState) -> str:
-        return "execute_tools" if state.get("pending_tools") else "verify"
+        pending = state.get("pending_tools") or []
+        if not pending:
+            return "verify"
+        decided = (state.get("approval") or {}).get("decided")
+        if any(_high_risk(call) for call in pending) and not decided:
+            return "request_approval"
+        return "execute_tools"
+
+    async def request_approval(state: AgentState) -> AgentState:
+        # interrupt() pauses the graph and checkpoints it; the visitor's
+        # stream ends with a pending notice. When Ruud decides via the admin
+        # endpoint, the graph resumes here and interrupt() returns his decision.
+        decision = interrupt(
+            {
+                "tool_calls": [
+                    {"name": call["name"], "input": call["input"]}
+                    for call in state.get("pending_tools") or []
+                    if _high_risk(call)
+                ],
+                "visitor_message": state["turns"][-1]["content"],
+            }
+        ) or {}
+        approved = bool(decision.get("approved"))
+        logger.info("High-risk action %s by Ruud", "approved" if approved else "rejected")
+        return {"approval": {"decided": True, "approved": approved, "note": decision.get("note")}}
 
     async def execute_tools(state: AgentState) -> AgentState:
         writer = get_stream_writer()
         used = list(state.get("tools_used") or [])
+        drafts = list(state.get("contact_drafts") or [])
+        approval = state.get("approval") or {}
         results = []
         for call in state.get("pending_tools") or []:
             name = call["name"]
@@ -204,11 +239,16 @@ def build_agent(
             if tool is None:
                 results.append(_tool_message(call, f"Unknown tool: {name}"))
                 continue
-            if tool.high_risk:
+            if tool.high_risk and not approval.get("approved"):
                 # Fail closed: without an explicit approval the action never runs.
-                detail = {"status": "declined", "reason": "This action needs Ruud's approval."}
+                detail = {
+                    "status": "declined",
+                    "reason": approval.get("note") or "Ruud declined this request.",
+                }
                 results.append(_tool_message(call, json.dumps(detail)))
                 continue
+            if tool.high_risk:
+                drafts.append({"tool": name, "input": call["input"]})
             try:
                 value = await asyncio.wait_for(
                     asyncio.to_thread(tool.run, **call["input"]), timeout=tool.timeout_s
@@ -225,6 +265,7 @@ def build_agent(
             "loop_messages": [*(state.get("loop_messages") or []), *results],
             "tool_rounds": (state.get("tool_rounds") or 0) + 1,
             "tools_used": used,
+            "contact_drafts": drafts,
         }
 
     async def verify(state: AgentState) -> AgentState:
@@ -262,11 +303,15 @@ def build_agent(
     graph.add_node("guard_input", _traced("guard_input", guard_input))
     graph.add_node("refuse", _traced("refuse", refuse))
     graph.add_node("generate", _traced("generate", generate))
+    graph.add_node("request_approval", _traced("request_approval", request_approval))
     graph.add_node("execute_tools", _traced("execute_tools", execute_tools))
     graph.add_node("verify", _traced("verify", verify))
     graph.add_edge(START, "guard_input")
     graph.add_conditional_edges("guard_input", route_after_guard, ["refuse", "generate"])
-    graph.add_conditional_edges("generate", route_after_generate, ["execute_tools", "verify"])
+    graph.add_conditional_edges(
+        "generate", route_after_generate, ["request_approval", "execute_tools", "verify"]
+    )
+    graph.add_edge("request_approval", "execute_tools")
     graph.add_edge("execute_tools", "generate")
     graph.add_edge("refuse", END)
     graph.add_edge("verify", END)
