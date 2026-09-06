@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     max_output_tokens: int = 4096
     knowledge_dir: Path = Path(__file__).resolve().parent.parent / "knowledge"
     rate_limit: str = "20 per 10 minutes"
+    # Hard daily spend cap (USD); when reached the agent refuses politely
+    # until midnight. 0 disables the cap.
+    daily_budget_usd: float = 2.0
 
 
 @lru_cache

@@ -25,6 +25,7 @@ from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 
 from ..knowledge import KnowledgeDoc
+from .budget import BudgetTracker
 from .guards import looks_like_refusal, screen_input, valid_citation
 from .state import AgentState
 from .tools import build_tools, tool_definitions
@@ -38,6 +39,11 @@ UNCITED_ANSWER_MIN_CHARS = 200
 
 # Numeric meta fields summed across the tool loop's model rounds.
 METERED_FIELDS = ("inputTokens", "outputTokens", "cachedTokens", "latencyMs")
+
+BUDGET_REFUSAL = (
+    "I've reached my usage budget for today — please come back tomorrow, or "
+    "contact Ruud directly via the site."
+)
 
 
 def _traced(name: str, fn: Callable[[AgentState], Any]) -> Callable[[AgentState], Any]:
@@ -86,6 +92,7 @@ def build_agent(
     get_provider: Callable[[], Any],
     docs: list[KnowledgeDoc],
     checkpointer: BaseCheckpointSaver | None = None,
+    budget: BudgetTracker | None = None,
 ) -> Any:
     """Compile the agent graph.
 
@@ -99,7 +106,12 @@ def build_agent(
     async def guard_input(state: AgentState) -> AgentState:
         flags: list[str] = []
         refusal: str | None = None
-        if (tripped := screen_input(state["turns"][-1]["content"])) is not None:
+        if budget is not None and budget.exceeded:
+            # Fail closed before any tokens are spent.
+            refusal = BUDGET_REFUSAL
+            flags.append("input:budget")
+            logger.warning("Budget guard tripped: $%.2f spent today", budget.spent_usd)
+        elif (tripped := screen_input(state["turns"][-1]["content"])) is not None:
             refusal, flag = tripped
             flags.append(flag)
             logger.info("Input guard tripped: %s", flag)
@@ -219,6 +231,8 @@ def build_agent(
         # Deterministic post-checks and bookkeeping; the run's per-node trace
         # goes out as a diagnostic SSE event.
         cost = (state.get("last_meta") or {}).get("costUsd") or 0.0
+        if budget is not None and cost:
+            budget.add(cost)
         flags = list(state.get("guard_flags") or [])
         answer = state.get("last_answer") or ""
         if (

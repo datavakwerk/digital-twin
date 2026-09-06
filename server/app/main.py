@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from langgraph.checkpoint.memory import InMemorySaver
 from slowapi.errors import RateLimitExceeded
 
+from .agent.budget import BudgetTracker
 from .agent.graph import build_agent
 from .chat import router as chat_router
 from .config import get_settings
@@ -27,8 +28,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # get_provider resolves lazily so tests can swap app.state.llm's client
     # without rebuilding the graph. In-memory checkpoints: threads live as
     # long as the process (Postgres arrives in Phase 9).
+    app.state.budget=BudgetTracker(settings.daily_budget_usd)
     app.state.agent = build_agent(
-        lambda: app.state.llm, app.state.knowledge, checkpointer=InMemorySaver()
+        lambda: app.state.llm,
+        app.state.knowledge,
+        checkpointer=InMemorySaver(),
+        budget=app.state.budget,
     )
     yield
     await app.state.llm.close()
