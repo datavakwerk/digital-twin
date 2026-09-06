@@ -27,7 +27,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # get_provider resolves lazily so tests can swap app.state.llm's client
     # without rebuilding the graph. In-memory checkpoints: threads live as
     # long as the process (Postgres arrives in Phase 9).
-    app.state.agent = build_agent(lambda: app.state.llm, checkpointer=InMemorySaver())
+    app.state.agent = build_agent(
+        lambda: app.state.llm, app.state.knowledge, checkpointer=InMemorySaver()
+    )
     yield
     await app.state.llm.close()
 

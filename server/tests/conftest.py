@@ -1,9 +1,11 @@
 import json
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
 import pytest
 
+from app.openai_client import OpenAICompatClient
 from app.rate_limit import limiter
 
 
@@ -46,3 +48,35 @@ def parse_events(body: str) -> list[dict[str, Any]]:
 def visible(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Drop diagnostic trace events; most tests assert the visitor-facing stream."""
     return [e for e in events if e["type"] != "trace"]
+
+def tool_call_stream(name: str, arguments: dict[str, Any],
+                     call_id: str = "call_1") -> list[dict[str, Any]]:
+    """A chunk sequence for a turn that ends in one tool call, with the
+    JSON arguments split across two deltas the way providers stream them."""
+    args = json.dumps(arguments)
+    return [
+        {"choices": [{"index": 0, "finish_reason": None, "delta": {"tool_calls": [
+            {"index": 0, "id": call_id,
+             "function": {"name": name, "arguments": args[:1]}}]}}]},
+        {"choices": [{"index": 0, "finish_reason": "tool_calls", "delta": {"tool_calls": [
+            {"index": 0, "function": {"arguments": args[1:]}}]}}]},
+        {"choices": [], "usage": {"prompt_tokens": 100, "completion_tokens": 30}},
+    ]
+
+def fake_llm(rounds: list[list[dict[str, Any]]]) -> tuple[OpenAICompatClient, SimpleNamespace]:
+    """A client whose Nth request answers rounds[N] (the last round repeats),
+    plus a recorder with `.calls` and `.payloads` for asserting on requests."""
+    recorder = SimpleNamespace(calls=0, payloads=[])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        recorder.calls += 1
+        recorder.payloads.append(json.loads(request.content))
+        body = rounds[min(recorder.calls - 1, len(rounds) - 1)]
+        return httpx.Response(
+            200, content=sse_bytes(body), headers={"content-type": "text/event-stream"},
+        )
+
+    client = OpenAICompatClient(
+        api_key="k", base_url="https://example.test/v1", transport=httpx.MockTransport(handler),
+    )
+    return client, recorder

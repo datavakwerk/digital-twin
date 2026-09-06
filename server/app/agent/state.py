@@ -23,6 +23,18 @@ class AgentState(TypedDict, total=False):
     last_meta: dict[str, Any] | None
     # Per-node latency of this run: [{"node": name, "ms": float}].
     trace: list[dict[str, Any]]
+    # Tool loop (reset per run):
+    # calls from the last model turn awaiting deterministic execution,
+    # as {"id", "name", "input"}.
+    pending_tools: list[dict[str, Any]]
+    # Chat-completions messages accumulated this run: the assistant turns
+    # carrying tool_calls and the role:"tool" results that answer them.
+    loop_messages: list[dict[str, Any]]
+    tool_rounds: int
+    # Usage/cost totals aggregated across the run's model rounds.
+    loop_meta: dict[str, Any] | None
+    # Every tool the model called on this thread (checkpointed audit trail).
+    tools_used: list[str]
     # Accumulated across the thread's lifetime (checkpointed).
     total_cost_usd: float
     message_count: int
