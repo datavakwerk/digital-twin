@@ -10,6 +10,9 @@ class ChatTurn(BaseModel):
 
 class ChatRequest(BaseModel):
     messages: list[ChatTurn] = Field(min_length=1, max_length=40)
+    # Stable conversation id for LangGraph checkpointing; the server generates
+    # one per request when absent (no cross-turn state in that case).
+    thread_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
     @field_validator("messages")
     @classmethod
     def last_turn_is_user(cls, messages: list[ChatTurn]) -> list[ChatTurn]:
