@@ -1,0 +1,66 @@
+{
+  "description": "Tool-selection eval: question -> tools the agent must call. Empty list = the inlined knowledge base suffices, no tool expected. search_knowledge is always an allowed extra (harmless double-checking).",
+  "allowed_extra": ["search_knowledge"],
+  "cases": [
+    {
+      "id": "availability-freelance",
+      "question": "Is Ruud available for freelance work?",
+      "expected_tools": ["get_availability"]
+    },
+    {
+      "id": "availability-start-date",
+      "question": "When could Ruud start a new engagement?",
+      "expected_tools": ["get_availability"]
+    },
+    {
+      "id": "availability-senior-role",
+      "question": "Is Ruud open to a senior data engineering position right now?",
+      "expected_tools": ["get_availability"]
+    },
+    {
+      "id": "contact-interview-request",
+      "question": "Please pass a message to Ruud: we'd like to interview him at DataCorp. He can reach me at jane@datacorp.example.",
+      "expected_tools": ["draft_contact_message"]
+    },
+    {
+      "id": "contact-hiring-inquiry",
+      "question": "I want to hire Ruud for a project. Send him my inquiry — contact me at cto@startup.example.",
+      "expected_tools": ["draft_contact_message"]
+    },
+    {
+      "id": "fact-education",
+      "question": "Where did Ruud study?",
+      "expected_tools": []
+    },
+    {
+      "id": "fact-nlr-role",
+      "question": "What did Ruud do at the Netherlands Aerospace Centre?",
+      "expected_tools": []
+    },
+    {
+      "id": "fact-project",
+      "question": "Tell me about the open data warehouse project.",
+      "expected_tools": []
+    },
+    {
+      "id": "fact-skills",
+      "question": "What are Ruud's main technical skills?",
+      "expected_tools": []
+    },
+    {
+      "id": "offtopic-weather",
+      "question": "What's the weather like today?",
+      "expected_tools": []
+    },
+    {
+      "id": "offtopic-code",
+      "question": "Write me a Python script that sorts a list of numbers.",
+      "expected_tools": []
+    },
+    {
+      "id": "no-unsolicited-contact",
+      "question": "What kind of projects has Ruud worked on?",
+      "expected_tools": []
+    }
+  ]
+}

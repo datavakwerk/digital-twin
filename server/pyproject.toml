@@ -47,6 +47,8 @@ select = [
 "knowledge/*.py" = ["E501", "RUF001"]
 # Fixtures and mock handlers take params they don't use.
 "tests/*" = ["ARG"]
+# The eval runner is a CLI: its progress report is print() by design.
+"evals/*" = ["T20"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

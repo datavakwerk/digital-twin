@@ -95,8 +95,10 @@ def build_tools(docs: list[KnowledgeDoc]) -> dict[str, Tool]:
                 name="draft_contact_message",
                 description=(
                     "Submit a message from the visitor to Ruud (hiring inquiry, "
-                    "collaboration, question). Requires Ruud's personal approval before "
-                    "it is recorded — tell the visitor it was submitted for approval."
+                    "collaboration, question). Call it whenever the visitor asks you to "
+                    "send, pass on, or forward something to Ruud, or leaves contact "
+                    "details for him. Requires Ruud's personal approval before it is "
+                    "recorded — tell the visitor it was submitted for approval."
                 ),
                 parameters={
                     "type": "object",
