@@ -6,4 +6,5 @@ node_modules/
 dist/
 .pytest_cache/
 .ruff_cache/
+server/evals/report*.json
 .claude/

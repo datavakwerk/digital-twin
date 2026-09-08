@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     # Empty disables the admin endpoints entirely.
     admin_token: str = ""
 
+    @property
+    def active_model(self) -> str:
+        """The model id the configured provider will be called with."""
+        return getattr(self, f"{self.llm_provider}_model")
+
 
 @lru_cache
 def get_settings() -> Settings:
