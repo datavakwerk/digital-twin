@@ -46,9 +46,8 @@ async def stream_sse(
         snapshot = await agent.aget_state(config)
         if snapshot.interrupts:
             # A high-risk tool paused the graph for Ruud's approval. Queue it
-            # for the admin endpoint and tell the visitor.
-            pending = snapshot.interrupts[0].value or {}
-            app_state.approvals[thread_id] = {"thread_id": thread_id, **pending}
+            # for the admin endpoint (durable with a database) and tell the visitor.
+            await app_state.approvals.add(thread_id, snapshot.interrupts[0].value or {})
             yield sse({"type": "text", "text": APPROVAL_NOTICE})
             yield sse({"type": "approval", "status": "pending"})
     except Exception:

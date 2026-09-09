@@ -6,8 +6,8 @@ the graph from the checkpoint — the tool executes (or is declined) and the
 model finishes its answer into the thread state.
 
 Protected by a bearer token (ADMIN_TOKEN). No token configured → endpoints
-off. The pending queue is an in-memory dict on app.state until Phase 9 makes
-it durable.
+off. The pending queue lives behind app.state.approvals — Postgres-backed
+when DATABASE_URL is set, in-memory otherwise.
 """
 
 import logging
@@ -44,7 +44,7 @@ def _unauthorized(request: Request) -> JSONResponse | None:
 async def list_approvals(request: Request) -> Any:
     if (denied := _unauthorized(request)) is not None:
         return denied
-    return {"pending": list(request.app.state.approvals.values())}
+    return {"pending": await request.app.state.approvals.list()}
 
 
 @router.post("/approvals/{thread_id}")
@@ -69,7 +69,7 @@ async def decide_approval(
         if event.get("type") == "text":
             answer.append(event["text"])
 
-    request.app.state.approvals.pop(thread_id, None)
+    await request.app.state.approvals.remove(thread_id)
     status = "approved" if decision.approved else "rejected"
     logger.info("Approval %s for thread %s", status, thread_id)
     return {"status": status, "thread_id": thread_id, "answer": "".join(answer)}
