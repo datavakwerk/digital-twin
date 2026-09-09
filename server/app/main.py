@@ -19,7 +19,9 @@ from .config import Settings, get_settings
 from .db import (
     InMemoryApprovalStore,
     PostgresApprovalStore,
+    TurnRecorder,
     create_engine_and_sessions,
+    load_today_spent,
     run_migrations,
 )
 from .knowledge import load_knowledge
@@ -56,10 +58,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await asyncio.to_thread(run_migrations, settings.database_url)
         engine, app.state.sessions = create_engine_and_sessions(settings.database_url)
         app.state.approvals = PostgresApprovalStore(app.state.sessions)
-        logger.info("Database ready, schema at head")
+        app.state.recorder = TurnRecorder(
+            app.state.sessions, provider=settings.llm_provider, model=settings.active_model
+        )
+        # The cap survives restarts: seed today's spend from the ledger.
+        app.state.budget.restore(await load_today_spent(app.state.sessions))
+        logger.info(
+            "Database ready, schema at head (today's spend: $%.4f)", app.state.budget.spent_usd
+        )
     else:
         # No database: nothing survives a restart.
         app.state.approvals = InMemoryApprovalStore()
+        app.state.recorder = None
     async with _checkpointer(settings) as checkpointer:
         # get_provider resolves lazily so tests can swap app.state.llm's client
         # without rebuilding the graph.

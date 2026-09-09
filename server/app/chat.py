@@ -40,18 +40,42 @@ async def stream_sse(
 ) -> AsyncIterator[str]:
     agent = app_state.agent
     config = {"configurable": {"thread_id": thread_id}}
+    # Gathered along the way for the turn log; the visitor only sees the events.
+    outcome = "answered"
+    meta: dict[str, Any] | None = None
+    tools_used: list[str] = []
+    guard_flags: list[str] = []
     try:
         async for event in agent.astream({"turns": turns}, config, stream_mode="custom"):
+            if event["type"] == "meta":
+                meta = event
+            elif event["type"] == "tool":
+                tools_used.append(event["name"])
             yield sse(event)
         snapshot = await agent.aget_state(config)
+        guard_flags = list(snapshot.values.get("guard_flags") or [])
+        if snapshot.values.get("refusal"):
+            outcome = "refused"
         if snapshot.interrupts:
             # A high-risk tool paused the graph for Ruud's approval. Queue it
             # for the admin endpoint (durable with a database) and tell the visitor.
+            outcome = "pending_approval"
             await app_state.approvals.add(thread_id, snapshot.interrupts[0].value or {})
             yield sse({"type": "text", "text": APPROVAL_NOTICE})
             yield sse({"type": "approval", "status": "pending"})
     except Exception:
         logger.exception("Chat stream failed")
+        outcome = "error"
         yield sse({"type": "error", "message": "Unexpected server error."})
-        return
-    yield sse({"type": "done"})
+    else:
+        yield sse({"type": "done"})
+    if app_state.recorder is not None:
+        # Turn log + budget ledger + guard incidents; best-effort, never raises.
+        await app_state.recorder.record(
+            thread_id=thread_id,
+            outcome=outcome,
+            meta=meta,
+            tools_used=tools_used,
+            guard_flags=guard_flags,
+            visitor_message=turns[-1]["content"],
+        )

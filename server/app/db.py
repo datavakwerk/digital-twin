@@ -12,11 +12,13 @@ called at startup so a deploy is always at head.
 """
 
 import logging
+import time
 from pathlib import Path
 from typing import Any, Protocol
 
-from sqlalchemy import JSON, DateTime, String, delete, func, select
+from sqlalchemy import JSON, DateTime, Float, Integer, String, Text, delete, func, select, update
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -60,6 +62,52 @@ def run_migrations(database_url: str) -> None:
     cfg.set_main_option("script_location", str(SERVER_DIR / "migrations"))
     cfg.set_main_option("sqlalchemy.url", sqlalchemy_url(database_url))
     command.upgrade(cfg, "head")
+
+
+class TurnLogRow(Base):
+    """One row per chat turn: tokens, cost, latency, tools, guard outcome."""
+
+    __tablename__ = "turn_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[Any] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    thread_id: Mapped[str] = mapped_column(String(64), index=True)
+    provider: Mapped[str] = mapped_column(String(32))
+    model: Mapped[str] = mapped_column(String(100))
+    # "answered" | "refused" | "pending_approval" | "error"
+    outcome: Mapped[str] = mapped_column(String(20))
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cached_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    tools_used: Mapped[list[str]] = mapped_column(JSONVariant, default=list)
+    guard_flags: Mapped[list[str]] = mapped_column(JSONVariant, default=list)
+
+
+class BudgetLedgerRow(Base):
+    """Daily spend, durable across restarts — backs the hard budget cap."""
+
+    __tablename__ = "budget_ledger"
+
+    day: Mapped[str] = mapped_column(String(10), primary_key=True)  # YYYY-MM-DD (local)
+    spent_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    updated_at: Mapped[Any] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class GuardIncidentRow(Base):
+    """Refusals and injection attempts with the offending input."""
+
+    __tablename__ = "guard_incidents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[Any] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    thread_id: Mapped[str] = mapped_column(String(64), index=True)
+    flags: Mapped[list[str]] = mapped_column(JSONVariant)
+    visitor_message: Mapped[str] = mapped_column(Text)
+
 
 class ApprovalStore(Protocol):
     async def add(self, thread_id: str, payload: dict[str, Any]) -> None: ...
@@ -113,3 +161,89 @@ class PostgresApprovalStore:
                 delete(PendingApprovalRow).where(PendingApprovalRow.thread_id == thread_id)
             )
             await session.commit()
+
+
+def _today() -> str:
+    return time.strftime("%Y-%m-%d")
+
+
+class TurnRecorder:
+    """Writes the per-turn telemetry: turn log, budget ledger, guard incidents.
+
+    Best-effort by design — a telemetry failure must never break the visitor's
+    chat stream, so every error is logged and swallowed.
+    """
+
+    def __init__(self, sessions: async_sessionmaker, provider: str, model: str) -> None:
+        self._sessions = sessions
+        self._provider = provider
+        self._model = model
+
+    async def record(
+        self,
+        *,
+        thread_id: str,
+        outcome: str,
+        meta: dict[str, Any] | None,
+        tools_used: list[str],
+        guard_flags: list[str],
+        visitor_message: str,
+    ) -> None:
+        meta = meta or {}
+        cost = float(meta.get("costUsd") or 0.0)
+        try:
+            async with self._sessions() as session:
+                session.add(
+                    TurnLogRow(
+                        thread_id=thread_id,
+                        provider=self._provider,
+                        model=self._model,
+                        outcome=outcome,
+                        input_tokens=int(meta.get("inputTokens") or 0),
+                        output_tokens=int(meta.get("outputTokens") or 0),
+                        cached_tokens=int(meta.get("cachedTokens") or 0),
+                        cost_usd=cost,
+                        latency_ms=int(meta.get("latencyMs") or 0),
+                        tools_used=tools_used,
+                        guard_flags=guard_flags,
+                    )
+                )
+                if guard_flags:
+                    session.add(
+                        GuardIncidentRow(
+                            thread_id=thread_id, flags=guard_flags, visitor_message=visitor_message
+                        )
+                    )
+                if cost:
+                    await self._add_spend(session, cost)
+                await session.commit()
+        except Exception:
+            logger.exception("Failed to record turn telemetry for thread %s", thread_id)
+
+    async def _add_spend(self, session: Any, cost: float) -> None:
+        day = _today()
+        result = await session.execute(
+            update(BudgetLedgerRow)
+            .where(BudgetLedgerRow.day == day)
+            .values(spent_usd=BudgetLedgerRow.spent_usd + cost)
+        )
+        if result.rowcount == 0:
+            # First turn of the day; a concurrent insert may win the race.
+            try:
+                async with session.begin_nested():
+                    session.add(BudgetLedgerRow(day=day, spent_usd=cost))
+            except IntegrityError:
+                await session.execute(
+                    update(BudgetLedgerRow)
+                    .where(BudgetLedgerRow.day == day)
+                    .values(spent_usd=BudgetLedgerRow.spent_usd + cost)
+                )
+
+
+async def load_today_spent(sessions: async_sessionmaker) -> float:
+    """Seed the in-memory budget tracker after a restart (restart-proof cap)."""
+    async with sessions() as session:
+        spent = await session.scalar(
+            select(BudgetLedgerRow.spent_usd).where(BudgetLedgerRow.day == _today())
+        )
+    return float(spent or 0.0)
