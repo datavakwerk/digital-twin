@@ -6,9 +6,10 @@ from app.agent.graph import build_agent
 from app.config import Settings
 from app.knowledge import load_knowledge
 from app.llm import OpenAICompatProvider
-from evals.run import eval_tool_selection, load_dataset, run_case
+from app.openai_client import OpenAICompatClient
+from evals.run import FlakyTransport, eval_tool_selection, load_dataset, run_case
 from evals.scoring import looks_like_refusal, score_completion, score_tool_selection
-from tests.conftest import fake_llm, text_stream, tool_call_stream
+from tests.conftest import fake_llm, fake_transport, text_stream, tool_call_stream
 
 
 def test_score_tool_selection():
@@ -118,3 +119,18 @@ def test_eval_tool_selection_end_to_end_scoring():
     assert summary["passed"] == expected_passes
     assert summary["total"] == len(dataset["cases"])
     assert summary["met"] is False  # tool-needing cases failed, as they should
+
+def test_failure_injection_is_absorbed_by_retries():
+    # Every other request dies at the transport; the client's retries must
+    # hide that completely from the graph — no error events, a full answer.
+    flaky = FlakyTransport(inner=fake_transport(text_stream("Still here.")))
+    llm = OpenAICompatClient(
+        api_key="k", base_url="https://example.test/v1", transport=flaky, retry_base_delay=0,
+    )
+    run = eval_agent(llm)
+
+    outcome = asyncio.run(run(lambda agent: run_case(agent, "Who is Ruud?", "t-eval-3")))
+
+    assert outcome["errors"] == []
+    assert outcome["text"] == "Still here."
+    assert flaky.injected == 1 and flaky.calls == 2
