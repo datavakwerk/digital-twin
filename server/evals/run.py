@@ -11,7 +11,8 @@ Runs against whichever provider .env configures — pick a cheap one
 Thresholds: tool selection >= 95%, task completion >= 90%.
 Exit code 1 when a threshold is missed (unless --no-strict). With failure
 injection every dropped request must be absorbed by the client's retries —
-an unrecovered failure fails its case, and so the threshold.
+an unrecovered failure fails its case, and so the threshold. With
+DATABASE_URL set, every run is also recorded in eval_runs / eval_cases.
 """
 
 import argparse
@@ -27,6 +28,7 @@ from langgraph.types import Command
 
 from app.agent.graph import build_agent
 from app.config import Settings, get_settings
+from app.db import create_engine_and_sessions, record_eval_run, run_migrations
 from app.knowledge import load_knowledge
 from app.llm import PROVIDERS, OpenAICompatProvider
 from app.openai_client import OpenAICompatClient
@@ -215,6 +217,17 @@ async def main(argv: list[str] | None = None) -> int:
         )
     Path(args.report).write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(f"report written to {args.report}")
+
+    if settings.database_url:
+        # report.json is only the latest snapshot; the database keeps one row
+        # per run and per case, so regressions show up as history.
+        await asyncio.to_thread(run_migrations, settings.database_url)
+        engine, sessions = create_engine_and_sessions(settings.database_url)
+        try:
+            run_pk = await record_eval_run(sessions, report)
+            print(f"eval history: recorded run #{run_pk}")
+        finally:
+            await engine.dispose()
 
     if args.no_strict:
         return 0

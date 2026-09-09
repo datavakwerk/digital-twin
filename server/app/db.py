@@ -16,7 +16,20 @@ import time
 from pathlib import Path
 from typing import Any, Protocol
 
-from sqlalchemy import JSON, DateTime, Float, Integer, String, Text, delete, func, select, update
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    delete,
+    func,
+    select,
+    update,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
@@ -107,6 +120,40 @@ class GuardIncidentRow(Base):
     thread_id: Mapped[str] = mapped_column(String(64), index=True)
     flags: Mapped[list[str]] = mapped_column(JSONVariant)
     visitor_message: Mapped[str] = mapped_column(Text)
+
+
+class EvalRunRow(Base):
+    """One eval-suite invocation: provider, thresholds met, total cost."""
+
+    __tablename__ = "eval_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[Any] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    provider: Mapped[str] = mapped_column(String(32))
+    model: Mapped[str] = mapped_column(String(100))
+    met: Mapped[bool] = mapped_column(Boolean)
+    cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    # Per-dataset summaries (accuracy, threshold, met) without the case rows.
+    summary: Mapped[list[dict[str, Any]]] = mapped_column(JSONVariant)
+    # {"injected": n, "recovered": n} for --failure-injection runs, else null.
+    failure_injection: Mapped[dict[str, Any] | None] = mapped_column(JSONVariant, nullable=True)
+
+
+class EvalCaseRow(Base):
+    """One case of one eval run — history instead of overwriting report.json."""
+
+    __tablename__ = "eval_cases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("eval_runs.id", ondelete="CASCADE"), index=True)
+    dataset: Mapped[str] = mapped_column(String(40))
+    case_id: Mapped[str] = mapped_column(String(80))
+    passed: Mapped[bool] = mapped_column(Boolean)
+    detail: Mapped[Any] = mapped_column(JSONVariant, nullable=True)
+    tools: Mapped[list[str]] = mapped_column(JSONVariant, default=list)
+    errors: Mapped[list[str]] = mapped_column(JSONVariant, default=list)
+    cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class ApprovalStore(Protocol):
@@ -247,3 +294,41 @@ async def load_today_spent(sessions: async_sessionmaker) -> float:
             select(BudgetLedgerRow.spent_usd).where(BudgetLedgerRow.day == _today())
         )
     return float(spent or 0.0)
+
+
+async def record_eval_run(sessions: async_sessionmaker, report: dict[str, Any]) -> int:
+    """Persist one eval-suite report: an eval_runs row plus one eval_cases row
+    per case. Returns the run id. Raises on failure — an eval run whose
+    history can't be written should fail loudly, unlike chat telemetry."""
+    datasets = report.get("datasets") or []
+    run = EvalRunRow(
+        provider=report["provider"],
+        model=report["model"],
+        met=all(summary["met"] for summary in datasets) if datasets else False,
+        cost_usd=round(sum(summary.get("costUsd") or 0.0 for summary in datasets), 5),
+        summary=[
+            {key: value for key, value in summary.items() if key != "results"}
+            for summary in datasets
+        ],
+        failure_injection=report.get("failure_injection"),
+    )
+    async with sessions() as session:
+        session.add(run)
+        await session.flush()  # assigns run.id for the case rows
+        for summary in datasets:
+            for row in summary.get("results") or []:
+                session.add(
+                    EvalCaseRow(
+                        run_id=run.id,
+                        dataset=summary["dataset"],
+                        case_id=row["id"],
+                        passed=row["passed"],
+                        detail=row.get("detail"),
+                        tools=row.get("tools") or [],
+                        errors=row.get("errors") or [],
+                        cost_usd=row.get("costUsd") or 0.0,
+                        latency_ms=row.get("latencyMs") or 0,
+                    )
+                )
+        await session.commit()
+    return run.id
