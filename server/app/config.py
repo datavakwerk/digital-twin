@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     # Bearer token for /api/admin/* (approving high-risk agent actions).
     # Empty disables the admin endpoints entirely.
     admin_token: str = ""
+    # Postgres for the data platform: checkpoints, approval queue, turn log,
+    # budget ledger, knowledge vectors. Empty = no database — everything
+    # in-memory, nothing survives a restart (tests, quick bare-metal dev).
+    database_url: str = ""
 
     @property
     def active_model(self) -> str:

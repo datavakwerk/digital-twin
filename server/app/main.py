@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -13,6 +14,7 @@ from .agent.budget import BudgetTracker
 from .agent.graph import build_agent
 from .chat import router as chat_router
 from .config import get_settings
+from .db import create_engine_and_sessions, run_migrations
 from .knowledge import load_knowledge
 from .llm import OpenAICompatProvider
 from .rate_limit import limiter
@@ -26,6 +28,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.knowledge = load_knowledge(settings.knowledge_dir)
     logger.info("Loaded %d knowledge documents", len(app.state.knowledge))
     app.state.llm = OpenAICompatProvider(settings, app.state.knowledge)
+    engine = None
+    app.state.sessions = None
+    if settings.database_url:
+        # Schema to head first, then the async engine the app will use.
+        await asyncio.to_thread(run_migrations, settings.database_url)
+        engine, app.state.sessions = create_engine_and_sessions(settings.database_url)
+        logger.info("Database ready, schema at head")
     # get_provider resolves lazily so tests can swap app.state.llm's client
     # without rebuilding the graph. In-memory checkpoints: threads live as
     # long as the process (Postgres arrives in Phase 9).
@@ -40,6 +49,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     yield
     await app.state.llm.close()
+    if engine is not None:
+        await engine.dispose()
 
 def create_app() -> FastAPI:
     app = FastAPI(title="digital-twin server", lifespan=lifespan)
@@ -59,7 +70,11 @@ def create_app() -> FastAPI:
 
     @app.get("/api/health")
     async def health(request: Request) -> dict:
-        return {"ok": True, "documents": len(request.app.state.knowledge)}
+        return {
+            "ok": True,
+            "documents": len(request.app.state.knowledge),
+            "database": request.app.state.sessions is not None,
+        }
 
     return app
 
