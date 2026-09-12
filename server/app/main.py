@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -5,20 +6,45 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from slowapi.errors import RateLimitExceeded
 
 from .admin import router as admin_router
 from .agent.budget import BudgetTracker
 from .agent.graph import build_agent
 from .chat import router as chat_router
-from .config import get_settings
+from .config import Settings, get_settings
+from .db import (
+    InMemoryApprovalStore,
+    PostgresApprovalStore,
+    TurnRecorder,
+    create_engine_and_sessions,
+    load_today_spent,
+    run_migrations,
+)
+from .embeddings import create_embedder
 from .knowledge import load_knowledge
 from .llm import OpenAICompatProvider
 from .rate_limit import limiter
+from .retrieval import SemanticRetriever, sync_knowledge_chunks
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def _checkpointer(settings: Settings) -> AsyncIterator[BaseCheckpointSaver]:
+    """Postgres checkpoints when DATABASE_URL is set; otherwise threads live
+    only as long as the process (tests, quick bare-metal dev)."""
+    if settings.database_url:
+        async with AsyncPostgresSaver.from_conn_string(settings.database_url) as saver:
+            await saver.setup()  # manages its own tables, outside alembic
+            yield saver
+    else:
+        yield InMemorySaver()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -26,26 +52,71 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.knowledge = load_knowledge(settings.knowledge_dir)
     logger.info("Loaded %d knowledge documents", len(app.state.knowledge))
     app.state.llm = OpenAICompatProvider(settings, app.state.knowledge)
-    # get_provider resolves lazily so tests can swap app.state.llm's client
-    # without rebuilding the graph. In-memory checkpoints: threads live as
-    # long as the process (Postgres arrives in Phase 9).
     app.state.budget = BudgetTracker(settings.daily_budget_usd)
-    # Threads paused for approval, keyed by thread_id (in-memory until Phase 9).
-    app.state.approvals = {}
-    app.state.agent = build_agent(
-        lambda: app.state.llm,
-        app.state.knowledge,
-        checkpointer=InMemorySaver(),
-        budget=app.state.budget,
-    )
-    yield
-    await app.state.llm.close()
+    engine = None
+    embedder = None
+    app.state.sessions = None
+    app.state.retriever = None
+    if settings.database_url:
+        # Schema to head first, then the async engine and the durable stores.
+        await asyncio.to_thread(run_migrations, settings.database_url)
+        engine, app.state.sessions = create_engine_and_sessions(settings.database_url)
+        app.state.approvals = PostgresApprovalStore(app.state.sessions)
+        app.state.recorder = TurnRecorder(
+            app.state.sessions, provider=settings.llm_provider, model=settings.active_model
+        )
+        # The cap survives restarts: seed today's spend from the ledger.
+        app.state.budget.restore(await load_today_spent(app.state.sessions))
+        logger.info(
+            "Database ready, schema at head (today's spend: $%.4f)", app.state.budget.spent_usd
+        )
+        if settings.embedding_provider:
+            # Semantic search: sync the chunk table, re-embedding only what
+            # changed since the last start.
+            embedder = create_embedder(settings)
+            counts = await sync_knowledge_chunks(
+                app.state.sessions, embedder, app.state.knowledge
+            )
+            app.state.retriever = SemanticRetriever(embedder, app.state.sessions)
+            logger.info(
+                "Knowledge chunks synced via %s (+%d new, %d kept, -%d stale)",
+                embedder.model_id, counts["embedded"], counts["kept"], counts["deleted"],
+            )
+    else:
+        # No database: nothing survives a restart.
+        app.state.approvals = InMemoryApprovalStore()
+        app.state.recorder = None
+        if settings.embedding_provider:
+            logger.warning("EMBEDDING_PROVIDER is set but DATABASE_URL is not — ignoring.")
+    async with _checkpointer(settings) as checkpointer:
+        # get_provider resolves lazily so tests can swap app.state.llm's client
+        # without rebuilding the graph.
+        app.state.agent = build_agent(
+            lambda: app.state.llm,
+            app.state.knowledge,
+            checkpointer=checkpointer,
+            budget=app.state.budget,
+            retriever=app.state.retriever,
+        )
+        logger.info(
+            "Server ready (checkpoints: %s, search: %s)",
+            "postgres" if settings.database_url else "in-memory",
+            "semantic" if app.state.retriever is not None else "term-overlap",
+        )
+        yield
+        await app.state.llm.close()
+        if embedder is not None:
+            await embedder.close()
+        if engine is not None:
+            await engine.dispose()
+
 
 def create_app() -> FastAPI:
     app = FastAPI(title="digital-twin server", lifespan=lifespan)
     app.state.limiter = limiter
     app.include_router(chat_router)
     app.include_router(admin_router)
+
     @app.exception_handler(RateLimitExceeded)
     async def rate_limited(_request: Request, _exc: RateLimitExceeded) -> JSONResponse:
         return JSONResponse(
@@ -59,7 +130,11 @@ def create_app() -> FastAPI:
 
     @app.get("/api/health")
     async def health(request: Request) -> dict:
-        return {"ok": True, "documents": len(request.app.state.knowledge)}
+        return {
+            "ok": True,
+            "documents": len(request.app.state.knowledge),
+            "database": request.app.state.sessions is not None,
+        }
 
     return app
 

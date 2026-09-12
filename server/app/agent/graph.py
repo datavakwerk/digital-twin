@@ -17,6 +17,7 @@ to the browser.
 """
 
 import asyncio
+import inspect
 import json
 import logging
 import time
@@ -92,19 +93,28 @@ def _tool_message(call: dict[str, Any], content: str) -> dict[str, Any]:
     return {"role": "tool", "tool_call_id": call["id"], "content": content}
 
 
+async def _call_tool(tool: Any, arguments: dict[str, Any]) -> Any:
+    """Run a tool: async ones (semantic search) directly, sync ones off-loop."""
+    if inspect.iscoroutinefunction(tool.run):
+        return await tool.run(**arguments)
+    return await asyncio.to_thread(tool.run, **arguments)
+
+
 def build_agent(
     get_provider: Callable[[], Any],
     docs: list[KnowledgeDoc],
     checkpointer: BaseCheckpointSaver | None = None,
     budget: BudgetTracker | None = None,
+    retriever: Any = None,
 ) -> Any:
     """Compile the agent graph.
 
     `get_provider` is resolved on every generation so the provider can be
     swapped (tests, future config reload) without rebuilding the graph.
+    `retriever` upgrades search_knowledge to semantic search when present.
     """
     known_titles = {doc.title for doc in docs}
-    tools_by_name = build_tools(docs)
+    tools_by_name = build_tools(docs, retriever)
     tool_defs = tool_definitions(tools_by_name)
 
     async def guard_input(state: AgentState) -> AgentState:
@@ -251,7 +261,7 @@ def build_agent(
                 drafts.append({"tool": name, "input": call["input"]})
             try:
                 value = await asyncio.wait_for(
-                    asyncio.to_thread(tool.run, **call["input"]), timeout=tool.timeout_s
+                    _call_tool(tool, call["input"]), timeout=tool.timeout_s
                 )
                 results.append(_tool_message(call, json.dumps(value)))
             except TimeoutError:
