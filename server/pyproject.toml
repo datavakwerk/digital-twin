@@ -13,6 +13,7 @@ dependencies = [
     "alembic>=1.14",
     "psycopg[binary]>=3.2",
     "langgraph-checkpoint-postgres>=2.0",
+    "pgvector>=0.3",
 ]
 
 [dependency-groups]

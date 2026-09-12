@@ -62,6 +62,7 @@ def test_migrations_run_to_head(tmp_path):
         "guard_incidents",
         "eval_runs",
         "eval_cases",
+        "knowledge_chunks",
     } <= tables
     engine.dispose()
 

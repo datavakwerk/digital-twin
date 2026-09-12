@@ -24,9 +24,11 @@ from .db import (
     load_today_spent,
     run_migrations,
 )
+from .embeddings import create_embedder
 from .knowledge import load_knowledge
 from .llm import OpenAICompatProvider
 from .rate_limit import limiter
+from .retrieval import SemanticRetriever, sync_knowledge_chunks
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -52,7 +54,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.llm = OpenAICompatProvider(settings, app.state.knowledge)
     app.state.budget = BudgetTracker(settings.daily_budget_usd)
     engine = None
+    embedder = None
     app.state.sessions = None
+    app.state.retriever = None
     if settings.database_url:
         # Schema to head first, then the async engine and the durable stores.
         await asyncio.to_thread(run_migrations, settings.database_url)
@@ -66,10 +70,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.info(
             "Database ready, schema at head (today's spend: $%.4f)", app.state.budget.spent_usd
         )
+        if settings.embedding_provider:
+            # Semantic search: sync the chunk table, re-embedding only what
+            # changed since the last start.
+            embedder = create_embedder(settings)
+            counts = await sync_knowledge_chunks(
+                app.state.sessions, embedder, app.state.knowledge
+            )
+            app.state.retriever = SemanticRetriever(embedder, app.state.sessions)
+            logger.info(
+                "Knowledge chunks synced via %s (+%d new, %d kept, -%d stale)",
+                embedder.model_id, counts["embedded"], counts["kept"], counts["deleted"],
+            )
     else:
         # No database: nothing survives a restart.
         app.state.approvals = InMemoryApprovalStore()
         app.state.recorder = None
+        if settings.embedding_provider:
+            logger.warning("EMBEDDING_PROVIDER is set but DATABASE_URL is not — ignoring.")
     async with _checkpointer(settings) as checkpointer:
         # get_provider resolves lazily so tests can swap app.state.llm's client
         # without rebuilding the graph.
@@ -78,12 +96,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             app.state.knowledge,
             checkpointer=checkpointer,
             budget=app.state.budget,
+            retriever=app.state.retriever,
         )
         logger.info(
-            "Server ready (checkpoints: %s)", "postgres" if settings.database_url else "in-memory"
+            "Server ready (checkpoints: %s, search: %s)",
+            "postgres" if settings.database_url else "in-memory",
+            "semantic" if app.state.retriever is not None else "term-overlap",
         )
         yield
         await app.state.llm.close()
+        if embedder is not None:
+            await embedder.close()
         if engine is not None:
             await engine.dispose()
 

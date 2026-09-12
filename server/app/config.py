@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     # budget ledger, knowledge vectors. Empty = no database — everything
     # in-memory, nothing survives a restart (tests, quick bare-metal dev).
     database_url: str = ""
+    # Embedding provider for semantic search_knowledge — the two chat
+    # providers that also expose an embeddings endpoint. Empty disables vector
+    # search (term-overlap fallback); requires DATABASE_URL.
+    embedding_provider: Literal["", "gemini", "openai"] = ""
+    gemini_embedding_model: str = "gemini-embedding-001"
+    openai_embedding_model: str = "text-embedding-3-small"
 
     @property
     def active_model(self) -> str:

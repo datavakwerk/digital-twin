@@ -3,17 +3,23 @@
 Each tool does exactly one thing, declares a strict JSON Schema
 (`additionalProperties: false`, every property required), and executes as
 deterministic Python inside a graph node — never in the model layer. The
-high-risk `draft_contact_message` tool is declined until a human approves it
-(the approval interrupt arrives in Commit 18); nothing here can act on the
-outside world.
+high-risk `draft_contact_message` tool never runs without a human approval;
+nothing here can act on the outside world.
+
+`search_knowledge` is semantic when a retriever is wired in (Postgres +
+pgvector) and falls back to term overlap without one — or whenever the
+vector search fails or comes back empty.
 """
 
+import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 from ..knowledge import KnowledgeDoc
+
+logger = logging.getLogger(__name__)
 
 # Keep in sync with the knowledge modules — this is the structured source the
 # model can quote exactly instead of paraphrasing prose.
@@ -57,7 +63,24 @@ def _search(docs: list[KnowledgeDoc], query: str) -> list[dict[str, str]]:
     return [{"document": title, "snippet": text[:MAX_SNIPPET_CHARS]} for _, title, text in top]
 
 
-def build_tools(docs: list[KnowledgeDoc]) -> dict[str, Tool]:
+def _semantic_search(docs: list[KnowledgeDoc], retriever: Any) -> Callable[..., Any]:
+    async def run(query: str) -> list[dict[str, str]]:
+        try:
+            results = await retriever.search(query)
+        except Exception:
+            logger.exception("Semantic search failed; falling back to term overlap")
+            results = []
+        return results or _search(docs, query)
+
+    return run
+
+
+def build_tools(docs: list[KnowledgeDoc], retriever: Any = None) -> dict[str, Tool]:
+    search = (
+        _semantic_search(docs, retriever)
+        if retriever is not None
+        else (lambda query: _search(docs, query))
+    )
     return {
         tool.name: tool
         for tool in (
@@ -75,7 +98,7 @@ def build_tools(docs: list[KnowledgeDoc]) -> dict[str, Tool]:
                     "required": ["query"],
                     "additionalProperties": False,
                 },
-                run=lambda query: _search(docs, query),
+                run=search,
             ),
             Tool(
                 name="get_availability",

@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 from typing import Any, Protocol
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     JSON,
     Boolean,
@@ -41,6 +42,10 @@ SERVER_DIR = Path(__file__).resolve().parent.parent
 
 # JSONB on Postgres, plain JSON elsewhere (tests run the models on SQLite).
 JSONVariant = JSON().with_variant(JSONB(), "postgresql")
+# pgvector on Postgres (dimension-free: the embedding_model column scopes each
+# vector space); JSON on SQLite so the sync logic stays testable without Postgres.
+EmbeddingVariant = JSON().with_variant(Vector(), "postgresql")
+
 
 def sqlalchemy_url(database_url: str) -> str:
     """Pin the psycopg3 driver onto a plain postgresql:// URL."""
@@ -208,6 +213,28 @@ class PostgresApprovalStore:
                 delete(PendingApprovalRow).where(PendingApprovalRow.thread_id == thread_id)
             )
             await session.commit()
+
+
+class KnowledgeChunkRow(Base):
+    """One embedded chunk of a knowledge document.
+
+    content_hash covers the embedded text, so editing a paragraph re-embeds
+    only that chunk on the next sync; embedding_model scopes the vector space
+    so switching providers re-embeds everything instead of mixing spaces.
+    """
+
+    __tablename__ = "knowledge_chunks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    doc_slug: Mapped[str] = mapped_column(String(80), index=True)
+    doc_title: Mapped[str] = mapped_column(String(200))
+    heading: Mapped[str] = mapped_column(String(200), default="")
+    chunk_index: Mapped[int] = mapped_column(Integer)
+    content: Mapped[str] = mapped_column(Text)
+    content_hash: Mapped[str] = mapped_column(String(64), index=True)
+    embedding: Mapped[Any] = mapped_column(EmbeddingVariant)
+    embedding_model: Mapped[str] = mapped_column(String(100), index=True)
+    updated_at: Mapped[Any] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 def _today() -> str:
