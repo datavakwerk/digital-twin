@@ -66,6 +66,7 @@ REFUSAL_MARKERS = (
     "don't see",
     "not in the knowledge",
     "no information",
+    "not something i",
     "nothing in",
     "no record",
     "not listed",

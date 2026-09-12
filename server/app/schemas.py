@@ -19,3 +19,11 @@ class ChatRequest(BaseModel):
         if messages[-1].role != "user":
             raise ValueError("last message must be from the user")
         return messages
+
+
+class FeedbackRequest(BaseModel):
+    thread_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    verdict: Literal["up", "down"]
+    question: str | None = Field(default=None, max_length=4000)
+    answer: str | None = Field(default=None, max_length=16000)
+    comment: str | None = Field(default=None, max_length=1000)

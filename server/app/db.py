@@ -36,6 +36,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from .agent.guards import looks_like_refusal
+
 logger = logging.getLogger(__name__)
 
 SERVER_DIR = Path(__file__).resolve().parent.parent
@@ -161,6 +163,48 @@ class EvalCaseRow(Base):
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
 
 
+class FeedbackRow(Base):
+    """👍/👎 per answer; thumbs-down rows carry the question + answer so they
+    can become eval cases."""
+
+    __tablename__ = "feedback"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[Any] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    thread_id: Mapped[str] = mapped_column(String(64), index=True)
+    verdict: Mapped[str] = mapped_column(String(4))  # "up" | "down"
+    question: Mapped[str | None] = mapped_column(Text, nullable=True)
+    answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class UnansweredQuestionRow(Base):
+    """Every refusal with the question asked — content-gap analytics."""
+
+    __tablename__ = "unanswered_questions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[Any] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    thread_id: Mapped[str] = mapped_column(String(64), index=True)
+    question: Mapped[str] = mapped_column(Text)
+    answer: Mapped[str] = mapped_column(Text)
+    reason: Mapped[str] = mapped_column(String(10))  # "guard" | "model"
+
+
+class ContactMessageRow(Base):
+    """Archive of approved draft_contact_message payloads."""
+
+    __tablename__ = "contact_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[Any] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    thread_id: Mapped[str] = mapped_column(String(64), index=True)
+    subject: Mapped[str] = mapped_column(Text)
+    message: Mapped[str] = mapped_column(Text)
+    sender_contact: Mapped[str] = mapped_column(Text)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class ApprovalStore(Protocol):
     async def add(self, thread_id: str, payload: dict[str, Any]) -> None: ...
     async def get(self, thread_id: str) -> dict[str, Any] | None: ...
@@ -262,6 +306,7 @@ class TurnRecorder:
         tools_used: list[str],
         guard_flags: list[str],
         visitor_message: str,
+        answer: str = "",
     ) -> None:
         meta = meta or {}
         cost = float(meta.get("costUsd") or 0.0)
@@ -286,6 +331,23 @@ class TurnRecorder:
                     session.add(
                         GuardIncidentRow(
                             thread_id=thread_id, flags=guard_flags, visitor_message=visitor_message
+                        )
+                    )
+                # Content-gap analytics: a guard refusal and an honest
+                # model-side "not in my knowledge base" both count.
+                if outcome == "refused":
+                    reason = "guard"
+                elif outcome == "answered" and looks_like_refusal(answer):
+                    reason = "model"
+                else:
+                    reason = None
+                if reason is not None:
+                    session.add(
+                        UnansweredQuestionRow(
+                            thread_id=thread_id,
+                            question=visitor_message,
+                            answer=answer,
+                            reason=reason,
                         )
                     )
                 if cost:
@@ -321,6 +383,56 @@ async def load_today_spent(sessions: async_sessionmaker) -> float:
             select(BudgetLedgerRow.spent_usd).where(BudgetLedgerRow.day == _today())
         )
     return float(spent or 0.0)
+
+
+async def record_feedback(
+    sessions: async_sessionmaker,
+    *,
+    thread_id: str,
+    verdict: str,
+    question: str | None,
+    answer: str | None,
+    comment: str | None,
+) -> None:
+    async with sessions() as session:
+        session.add(
+            FeedbackRow(
+                thread_id=thread_id,
+                verdict=verdict,
+                question=question,
+                answer=answer,
+                comment=comment,
+            )
+        )
+        await session.commit()
+
+
+async def archive_contact_messages(
+    sessions: async_sessionmaker,
+    *,
+    thread_id: str,
+    tool_calls: list[dict[str, Any]],
+    note: str | None,
+) -> int:
+    """Archive the draft_contact_message payloads of an approved action."""
+    drafts = [
+        call.get("input") or {}
+        for call in tool_calls
+        if call.get("name") == "draft_contact_message"
+    ]
+    async with sessions() as session:
+        for draft in drafts:
+            session.add(
+                ContactMessageRow(
+                    thread_id=thread_id,
+                    subject=str(draft.get("subject") or ""),
+                    message=str(draft.get("message") or ""),
+                    sender_contact=str(draft.get("sender_contact") or ""),
+                    note=note,
+                )
+            )
+        await session.commit()
+    return len(drafts)
 
 
 async def record_eval_run(sessions: async_sessionmaker, report: dict[str, Any]) -> int:
