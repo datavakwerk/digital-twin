@@ -8,3 +8,5 @@ dist/
 .ruff_cache/
 server/evals/report*.json
 .claude/
+server/static/
+backups/

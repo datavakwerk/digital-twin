@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -135,6 +136,12 @@ def create_app() -> FastAPI:
             "documents": len(request.app.state.knowledge),
             "database": request.app.state.sessions is not None,
         }
+
+    # Production: serve the built client. Declared last, so every /api route
+    # above takes precedence over the catch-all static mount.
+    static_dir = get_settings().static_dir
+    if static_dir.is_dir():
+        app.mount("/", StaticFiles(directory=static_dir, html=True), name="client")
 
     return app
 

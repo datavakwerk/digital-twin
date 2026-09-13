@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     moonshot_api_key: str = ""
     max_output_tokens: int = 4096
     knowledge_dir: Path = Path(__file__).resolve().parent.parent / "knowledge"
+    # Built client assets; when the directory exists the server serves them at /
+    # (production image). In dev it doesn't exist and Vite serves the client.
+    static_dir: Path = Path(__file__).resolve().parent.parent / "static"
     rate_limit: str = "20 per 10 minutes"
     # Hard daily spend cap (USD); when reached the agent refuses politely
     # until midnight. 0 disables the cap.
