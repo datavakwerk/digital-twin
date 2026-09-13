@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>Ask Ruud — embed demo</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 42rem;
+        margin: 4rem auto;
+        padding: 0 1rem;
+        line-height: 1.6;
+        color: #333;
+      }
+      pre {
+        background: #f4f4f4;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        overflow-x: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Ask Ruud — embed demo</h1>
+    <p>
+      This page stands in for ruudjuffermans.nl. The chat bubble in the corner
+      comes from a single script tag — the widget runs in an iframe on the
+      assistant's origin, so this page never touches the API.
+    </p>
+    <pre>&lt;script src="https://ask.ruudjuffermans.nl/widget.js" defer&gt;&lt;/script&gt;</pre>
+    <p>
+      The demo below loads it relative to this origin, so it works locally and
+      in production alike.
+    </p>
+
+    <script src="/widget.js" defer></script>
+  </body>
+</html>

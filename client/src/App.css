@@ -8,6 +8,10 @@
 }
 
 .chat-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
   padding: 1rem 0 0.75rem;
   border-bottom: 1px solid var(--border);
 }
@@ -143,4 +147,33 @@
 .composer button:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* Embedded in an iframe via widget.js: the parent owns the panel chrome. */
+.chat.embed {
+  max-width: none;
+  padding: 0 0.75rem;
+}
+
+.embed-controls {
+  display: flex;
+  gap: 0.25rem;
+  margin-top: 0.125rem;
+}
+
+.embed-controls button {
+  width: 2rem;
+  height: 2rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--surface);
+  color: var(--muted);
+  font: inherit;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.embed-controls button:hover {
+  color: inherit;
 }
