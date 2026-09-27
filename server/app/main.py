@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -29,6 +30,7 @@ from .knowledge import load_knowledge
 from .llm import OpenAICompatProvider
 from .rate_limit import limiter
 from .retrieval import SemanticRetriever, sync_knowledge_chunks
+from .security import install_security
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -112,8 +114,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="digital-twin server", lifespan=lifespan)
+    # No docs endpoints in production: they advertise the schema for free.
+    app = FastAPI(
+        title="digital-twin server",
+        lifespan=lifespan,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
     app.state.limiter = limiter
+    install_security(app, get_settings().frame_ancestors)
     app.include_router(chat_router)
     app.include_router(admin_router)
 
@@ -135,6 +145,12 @@ def create_app() -> FastAPI:
             "documents": len(request.app.state.knowledge),
             "database": request.app.state.sessions is not None,
         }
+
+    # Production: serve the built client. Declared last, so every /api route
+    # above takes precedence over the catch-all static mount.
+    static_dir = get_settings().static_dir
+    if static_dir.is_dir():
+        app.mount("/", StaticFiles(directory=static_dir, html=True), name="client")
 
     return app
 

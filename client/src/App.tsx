@@ -10,6 +10,17 @@ interface Message {
   citations?: string[]
 }
 
+// Embedded in another site via widget.js: the parent page owns the launcher
+// and the iframe chrome; we render the chat full-bleed and signal close /
+// resize intents up via postMessage.
+const EMBED = new URLSearchParams(window.location.search).has("embed");
+
+function postToParent(message: { type: string; expanded?: boolean }) {
+  // The signals carry nothing sensitive, so "*" is fine here; widget.js
+  // validates the message *source* before acting on it.
+  window.parent.postMessage(message, "*");
+}
+
 export default function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -18,12 +29,35 @@ export default function App() {
   // One conversation thread per page load; the server checkpoints state by it.
   const threadRef = useRef(crypto.randomUUID());
   const bottomRef = useRef<HTMLDivElement>(null);
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  function toggleExpanded() {
+    const next = !expanded;
+    setExpanded(next);
+    postToParent({ type: "ask-ruud:resize", expanded: next });
+  }
+
+  useEffect(() => {
+    if (!EMBED) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      // Escape steps back: first out of the expanded view, then closes.
+      if (expanded) {
+        setExpanded(false);
+        postToParent({ type: "ask-ruud:resize", expanded: false });
+      } else {
+        postToParent({ type: "ask-ruud:close" });
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [expanded]);
 
   async function send(e: FormEvent) {
     e.preventDefault();
@@ -81,10 +115,31 @@ export default function App() {
   }
 
   return (
-    <main className="chat">
+    <main className={EMBED ? "chat embed" : "chat"}>
       <header className="chat-header">
-        <h1>Ask Ruud</h1>
-        <p>A digital twin of Ruud Juffermans — ask about his work.</p>
+        <div>
+          <h1>Ask Ruud</h1>
+          <p>AI digital twin of Ruud Juffermans — ask me about my work.</p>
+        </div>
+        {EMBED && (
+          <div className="embed-controls">
+            <button
+              type="button"
+              onClick={toggleExpanded}
+              aria-label={expanded ? "Shrink chat window" : "Expand chat window"}
+              aria-pressed={expanded}
+            >
+              {expanded ? "⤡" : "⤢"}
+            </button>
+            <button
+              type="button"
+              onClick={() => postToParent({ type: "ask-ruud:close" })}
+              aria-label="Close chat"
+            >
+              ×
+            </button>
+          </div>
+        )}
       </header>
 
       <div className="messages">

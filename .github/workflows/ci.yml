@@ -28,3 +28,10 @@ jobs:
           cache-dependency-path: client/package-lock.json
       - run: npm ci
       - run: npm run build
+  
+  image:
+    runs-on: ubuntu-latest
+    needs: [server, client]
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t digital-twin .

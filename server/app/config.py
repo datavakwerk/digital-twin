@@ -21,7 +21,14 @@ class Settings(BaseSettings):
     moonshot_api_key: str = ""
     max_output_tokens: int = 4096
     knowledge_dir: Path = Path(__file__).resolve().parent.parent / "knowledge"
+    # Built client assets; when the directory exists the server serves them at /
+    # (production image). In dev it doesn't exist and Vite serves the client.
+    static_dir: Path = Path(__file__).resolve().parent.parent / "static"
     rate_limit: str = "20 per 10 minutes"
+    # Sites allowed to embed the chat in an iframe (widget.js), as a CSP
+    # frame-ancestors source list. 'self' covers the embed demo; add the
+    # production site: "'self' https://ruudjuffermans.nl".
+    frame_ancestors: str = "'self'"
     # Hard daily spend cap (USD); when reached the agent refuses politely
     # until midnight. 0 disables the cap.
     daily_budget_usd: float = 2.0
