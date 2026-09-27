@@ -7,6 +7,12 @@
 # app container reads the same file through env_file). TLS and the domain
 # terminate at the host's reverse proxy (see Commit 30).
 #
+# Dokploy: create a Compose service pointing at this file, paste the contents
+# of server/.env into its Environment tab (Dokploy writes them to ./.env, which
+# is read below), and add a Domain for service "app" on container port 3000.
+# No host port is published: the Dokploy host already uses 3000 for its own UI
+# and Traefik reaches the container over the compose network.
+#
 # Backups: run the one-shot service from a daily host cron —
 #   docker compose --env-file server/.env -f docker-compose.prod.yml run --rm db-backup
 # It writes ./backups/twin-<date>.sql.gz (sync the directory off-host). Restore:
@@ -15,9 +21,14 @@
 services:
   app:
     build: .
-    ports:
-      - "3000:3000"
-    env_file: server/.env
+    expose:
+      - "3000"
+    # Whichever exists: ./.env (Dokploy's Environment tab) or server/.env (local).
+    env_file:
+      - path: .env
+        required: false
+      - path: server/.env
+        required: false
     environment:
       DATABASE_URL: postgresql://twin:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in server/.env}@db:5432/twin
     depends_on:
