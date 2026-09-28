@@ -8,12 +8,25 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --border: #3a3a44;
     --surface: #26262e;
     --muted: #9ca3af;
     --accent: #6366f1;
   }
+}
+
+/* Pinned by the host site (theme.ts) instead of following the OS. */
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --border: #3a3a44;
+  --surface: #26262e;
+  --muted: #9ca3af;
+  --accent: #6366f1;
+  color-scheme: dark;
 }
 
 * {
@@ -22,6 +35,10 @@
 
 body {
   margin: 0;
+  /* Explicit: an iframe's canvas is transparent when its scheme matches the
+     host's, which would show the widget panel behind the chat. */
+  background: Canvas;
+  color: CanvasText;
   font-family:
     system-ui,
     -apple-system,

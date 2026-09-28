@@ -10,9 +10,16 @@
  * conversation stays in the iframe's origin. The iframe is created on first
  * open, so visitors who never click pay nothing.
  *
+ * Theme: the chat follows the visitor's OS colour scheme. If the host site has
+ * its own light/dark switch, name the <html> attribute that holds the active
+ * scheme ("light" or "dark") and the chat follows that instead, live:
+ *   <script src=".../widget.js" data-theme-attribute="data-theme" defer></script>
+ *
  * postMessage protocol (iframe -> parent, source-checked):
  *   {type: "ask-ruud:close"}                    close the panel
  *   {type: "ask-ruud:resize", expanded: bool}   grow/shrink the iframe
+ * postMessage protocol (parent -> iframe):
+ *   {type: "ask-ruud:theme", theme: "light" | "dark" | null}   null = follow OS
  */
 (function () {
   "use strict";
@@ -22,6 +29,7 @@
 
   var script = document.currentScript;
   var origin = new URL(script.src).origin;
+  var themeAttr = script.getAttribute("data-theme-attribute");
   var Z = 2147483000;
 
   var style = document.createElement("style");
@@ -40,6 +48,7 @@
     "box-shadow:0 0 8rem rgba(0,0,0,.1),0 2rem 4rem -3rem rgba(0,0,0,.5);",
     "opacity:0;transform:translateY(8px);pointer-events:none;",
     "transition:opacity .2s ease,transform .2s ease,width .2s ease,height .2s ease}",
+    ".ask-ruud-frame.dark{background:#121212}",
     ".ask-ruud-frame.open{opacity:1;transform:none;pointer-events:auto}",
     ".ask-ruud-frame.expanded{width:min(900px,calc(100vw - 32px));",
     "height:calc(100dvh - 32px);bottom:16px}",
@@ -70,12 +79,22 @@
   var frame = null;
   var open = false;
 
+  // The host's active scheme, or null when it has none (chat follows the OS).
+  function hostTheme() {
+    if (!themeAttr) return null;
+    var value = document.documentElement.getAttribute(themeAttr);
+    return value === "dark" || value === "light" ? value : null;
+  }
+
   function ensureFrame() {
     if (wrap) return;
+    var theme = hostTheme();
     wrap = document.createElement("div");
     wrap.className = "ask-ruud-frame";
+    wrap.classList.toggle("dark", theme === "dark");
     frame = document.createElement("iframe");
-    frame.src = origin + "/?embed=1";
+    // In the URL so the first paint is already right; changes go by message.
+    frame.src = origin + "/?embed=1" + (theme ? "&theme=" + theme : "");
     frame.title = "Ask Ruud — AI chat about Ruud Juffermans";
     frame.setAttribute("allow", "clipboard-write");
     wrap.appendChild(frame);
@@ -113,6 +132,15 @@
       wrap.classList.toggle("expanded", Boolean(data.expanded));
     }
   });
+
+  if (themeAttr) {
+    new MutationObserver(function () {
+      if (!frame) return;
+      var theme = hostTheme();
+      wrap.classList.toggle("dark", theme === "dark");
+      frame.contentWindow.postMessage({ type: "ask-ruud:theme", theme: theme }, origin);
+    }).observe(document.documentElement, { attributes: true, attributeFilter: [themeAttr] });
+  }
 
   function mount() {
     document.body.appendChild(launcher);

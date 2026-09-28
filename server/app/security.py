@@ -10,6 +10,13 @@ One ASGI-level middleware, deliberately boring:
   legacy X-Frame-Options.
 - HSTS only when the request arrived over TLS (directly or via the proxy's
   X-Forwarded-Proto), so a plain-http dev server never pins itself.
+- `Cache-Control: no-cache` on everything outside /assets/ that doesn't set
+  its own. The static mount sends only ETag/Last-Modified, so browsers cache
+  index.html and widget.js heuristically — for hours, together with the
+  headers they arrived with (a stale frame-ancestors keeps blocking the
+  embed after a redeploy). no-cache still stores the response but
+  revalidates it first. The content-hashed bundles under /assets/ are left
+  alone.
 - Bodies larger than MAX_BODY_BYTES are refused up front with a 413. The
   chat schema already caps turns and lengths; this stops a multi-megabyte
   body before pydantic ever parses it.
@@ -27,6 +34,8 @@ from starlette.responses import Response
 logger = logging.getLogger(__name__)
 
 MAX_BODY_BYTES = 256 * 1024
+# Vite's content-hashed bundles; a new build gets new URLs.
+HASHED_ASSETS_PREFIX = "/assets/"
 
 STATIC_HEADERS = {
     "X-Content-Type-Options": "nosniff",
@@ -74,6 +83,10 @@ class SecurityMiddleware(BaseHTTPMiddleware):
                 )
         response.headers.update(STATIC_HEADERS)
         response.headers["Content-Security-Policy"] = self._csp
+        if "Cache-Control" not in response.headers and not request.url.path.startswith(
+            HASHED_ASSETS_PREFIX
+        ):
+            response.headers["Cache-Control"] = "no-cache"
         scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
         if scheme == "https":
             response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
